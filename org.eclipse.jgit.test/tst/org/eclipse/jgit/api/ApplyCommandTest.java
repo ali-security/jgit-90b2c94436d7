@@ -273,6 +273,34 @@ public class ApplyCommandTest extends RepositoryTestCase {
 		assertFalse(new File(db.getWorkTree(), "NonASCIIDel").exists());
 	}
 
+	private void dotGitTest(String fileName) throws Exception {
+		init(fileName, false, false);
+	}
+
+	@Test(expected = PatchApplyException.class)
+	public void testDotGit() throws Exception {
+		dotGitTest("dotgit");
+	}
+
+	@Test(expected = PatchApplyException.class)
+	public void testDotGit2() throws Exception {
+		dotGitTest("dotgit2");
+	}
+
+	@Test
+	public void testDotGitNotWritten() throws Exception {
+		for (String name : new String[] { "dotgit", "dotgit2" }) {
+			try {
+				dotGitTest(name);
+				fail("Patch " + name + " should have been rejected");
+			} catch (PatchApplyException e) {
+				// expected
+			}
+			assertFalse(".git/b should not exist",
+					new File(db.getDirectory(), "b").exists());
+		}
+	}
+
 	private static byte[] readFile(String patchFile) throws IOException {
 		final InputStream in = getTestResource(patchFile);
 		if (in == null) {

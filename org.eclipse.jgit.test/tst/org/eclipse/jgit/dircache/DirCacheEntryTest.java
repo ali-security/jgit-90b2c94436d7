@@ -67,6 +67,16 @@ public class DirCacheEntryTest {
 		assertFalse(isValidPath("a/"));
 		assertFalse(isValidPath("ab/cd/ef/"));
 		assertFalse(isValidPath("a\u0000b"));
+		assertFalse(isValidPath(".git"));
+		assertFalse(isValidPath(".GIT"));
+		assertFalse(isValidPath(".Git"));
+		assertFalse(isValidPath(".git/b"));
+		assertFalse(isValidPath(".GIT/b"));
+		assertFalse(isValidPath(".Git/b"));
+		assertFalse(isValidPath("x/y/.git/z/b"));
+		assertFalse(isValidPath("x/y/.GIT/z/b"));
+		assertFalse(isValidPath("x/y/.Git/z/b"));
+		assertTrue(isValidPath("git/b"));
 	}
 
 	@SuppressWarnings("unused")

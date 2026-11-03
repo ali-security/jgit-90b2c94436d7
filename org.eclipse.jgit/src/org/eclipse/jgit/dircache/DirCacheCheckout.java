@@ -45,10 +45,8 @@ package org.eclipse.jgit.dircache;
 import static org.eclipse.jgit.treewalk.TreeWalk.OperationType.CHECKOUT_OP;
 
 import java.io.File;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
-import java.nio.file.StandardCopyOption;
 import java.text.MessageFormat;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -71,7 +69,6 @@ import org.eclipse.jgit.lib.ConfigConstants;
 import org.eclipse.jgit.lib.Constants;
 import org.eclipse.jgit.lib.CoreConfig.AutoCRLF;
 import org.eclipse.jgit.lib.CoreConfig.EolStreamType;
-import org.eclipse.jgit.lib.CoreConfig.SymLinks;
 import org.eclipse.jgit.lib.FileMode;
 import org.eclipse.jgit.lib.NullProgressMonitor;
 import org.eclipse.jgit.lib.ObjectChecker;
@@ -91,7 +88,6 @@ import org.eclipse.jgit.treewalk.WorkingTreeOptions;
 import org.eclipse.jgit.treewalk.filter.PathFilter;
 import org.eclipse.jgit.util.FS;
 import org.eclipse.jgit.util.FS.ExecutionResult;
-import org.eclipse.jgit.util.FileUtils;
 import org.eclipse.jgit.util.IntList;
 import org.eclipse.jgit.util.RawParseUtils;
 import org.eclipse.jgit.util.SystemReader;
@@ -160,6 +156,8 @@ public class DirCacheCheckout {
 	private boolean emptyDirCache;
 
 	private boolean performingCheckout;
+
+	private Checkout checkout;
 
 	private ProgressMonitor monitor = NullProgressMonitor.INSTANCE;
 
@@ -506,6 +504,7 @@ public class DirCacheCheckout {
 			CheckoutConflictException, IndexWriteException, CanceledException {
 		toBeDeleted.clear();
 		try (ObjectReader objectReader = repo.getObjectDatabase().newReader()) {
+			checkout = new Checkout(repo, null);
 			if (headCommitTree != null)
 				preScanTwoTrees();
 			else
@@ -572,9 +571,9 @@ public class DirCacheCheckout {
 					CheckoutMetadata meta = e.getValue();
 					DirCacheEntry entry = dc.getEntry(path);
 					if (FileMode.GITLINK.equals(entry.getRawMode())) {
-						checkoutGitlink(path, entry);
+						checkout.checkoutGitlink(entry, path);
 					} else {
-						checkoutEntry(repo, entry, objectReader, false, meta);
+						checkout.checkout(entry, meta, objectReader, path);
 					}
 					e = null;
 
@@ -604,14 +603,6 @@ public class DirCacheCheckout {
 				throw new IndexWriteException();
 		}
 		return toBeDeleted.size() == 0;
-	}
-
-	private void checkoutGitlink(String path, DirCacheEntry entry)
-			throws IOException {
-		File gitlinkDir = new File(repo.getWorkTree(), path);
-		FileUtils.mkdirs(gitlinkDir, true);
-		FS fs = repo.getFS();
-		entry.setLastModified(fs.lastModified(gitlinkDir));
 	}
 
 	private static ArrayList<String> filterOut(ArrayList<String> strings,
@@ -1416,34 +1407,41 @@ public class DirCacheCheckout {
 	public static void checkoutEntry(Repository repo, DirCacheEntry entry,
 			ObjectReader or, boolean deleteRecursive,
 			CheckoutMetadata checkoutMetadata) throws IOException {
-		if (checkoutMetadata == null)
-			checkoutMetadata = CheckoutMetadata.EMPTY;
-		ObjectLoader ol = or.open(entry.getObjectId());
-		File f = new File(repo.getWorkTree(), entry.getPathString());
-		File parentDir = f.getParentFile();
-		FileUtils.mkdirs(parentDir, true);
-		FS fs = repo.getFS();
-		WorkingTreeOptions opt = repo.getConfig().get(WorkingTreeOptions.KEY);
-		if (entry.getFileMode() == FileMode.SYMLINK
-				&& opt.getSymLinks() == SymLinks.TRUE) {
-			byte[] bytes = ol.getBytes();
-			String target = RawParseUtils.decode(bytes);
-			if (deleteRecursive && f.isDirectory()) {
-				FileUtils.delete(f, FileUtils.RECURSIVE);
-			}
-			fs.createSymLink(f, target);
-			entry.setLength(bytes.length);
-			entry.setLastModified(fs.lastModified(f));
-			return;
-		}
+		Checkout checkout = new Checkout(repo, null)
+				.setRecursiveDeletion(deleteRecursive);
+		checkout.checkout(entry, checkoutMetadata, or, null);
+	}
 
-		String name = f.getName();
-		if (name.length() > 200) {
-			name = name.substring(0, 200);
-		}
-		File tmpFile = File.createTempFile(
-				"._" + name, null, parentDir); //$NON-NLS-1$
-
+	/**
+	 * Write filtered content for a specific object (blob) to the given output
+	 * stream. EOL handling and smudge-filter handling are applied in the same
+	 * way as it would be done during a checkout.
+	 *
+	 * @param repo
+	 *            the repository
+	 * @param path
+	 *            the path used to determine the correct filters for the object
+	 * @param checkoutMetadata
+	 *            containing
+	 *            <ul>
+	 *            <li>smudgeFilterCommand to be run for smudging the object</li>
+	 *            <li>eolStreamType used for stream conversion (can be
+	 *            null)</li>
+	 *            </ul>
+	 * @param ol
+	 *            the object loader to read raw content of the object
+	 * @param opt
+	 *            the working tree options where only 'core.autocrlf' is used
+	 *            for EOL handling if 'checkoutMetadata.eolStreamType' is not
+	 *            valid
+	 * @param os
+	 *            the output stream the filtered content is written to; it is
+	 *            closed when this method returns
+	 * @throws IOException
+	 */
+	static void getContent(Repository repo, String path,
+			CheckoutMetadata checkoutMetadata, ObjectLoader ol,
+			WorkingTreeOptions opt, OutputStream os) throws IOException {
 		EolStreamType nonNullEolStreamType;
 		if (checkoutMetadata.eolStreamType != null) {
 			nonNullEolStreamType = checkoutMetadata.eolStreamType;
@@ -1453,63 +1451,27 @@ public class DirCacheCheckout {
 			nonNullEolStreamType = EolStreamType.DIRECT;
 		}
 		try (OutputStream channel = EolStreamTypeUtil.wrapOutputStream(
-				new FileOutputStream(tmpFile), nonNullEolStreamType)) {
+				os, nonNullEolStreamType)) {
 			if (checkoutMetadata.smudgeFilterCommand != null) {
 				if (FilterCommandRegistry
 						.isRegistered(checkoutMetadata.smudgeFilterCommand)) {
 					runBuiltinFilterCommand(repo, checkoutMetadata, ol,
 							channel);
 				} else {
-					runExternalFilterCommand(repo, entry, checkoutMetadata, ol,
-							fs, channel);
+					runExternalFilterCommand(repo, path, checkoutMetadata, ol,
+							channel);
 				}
 			} else {
 				ol.copyTo(channel);
 			}
 		}
-		// The entry needs to correspond to the on-disk filesize. If the content
-		// was filtered (either by autocrlf handling or smudge filters) ask the
-		// filesystem again for the length. Otherwise the objectloader knows the
-		// size
-		if (checkoutMetadata.eolStreamType == EolStreamType.DIRECT
-				&& checkoutMetadata.smudgeFilterCommand == null) {
-			entry.setLength(ol.getSize());
-		} else {
-			entry.setLength(tmpFile.length());
-		}
-
-		if (opt.isFileMode() && fs.supportsExecute()) {
-			if (FileMode.EXECUTABLE_FILE.equals(entry.getRawMode())) {
-				if (!fs.canExecute(tmpFile))
-					fs.setExecute(tmpFile, true);
-			} else {
-				if (fs.canExecute(tmpFile))
-					fs.setExecute(tmpFile, false);
-			}
-		}
-		try {
-			if (deleteRecursive && f.isDirectory()) {
-				FileUtils.delete(f, FileUtils.RECURSIVE);
-			}
-			FileUtils.rename(tmpFile, f, StandardCopyOption.ATOMIC_MOVE);
-		} catch (IOException e) {
-			throw new IOException(
-					MessageFormat.format(JGitText.get().renameFileFailed,
-							tmpFile.getPath(), f.getPath()),
-					e);
-		} finally {
-			if (tmpFile.exists()) {
-				FileUtils.delete(tmpFile);
-			}
-		}
-		entry.setLastModified(fs.lastModified(f));
 	}
 
 	// Run an external filter command
-	private static void runExternalFilterCommand(Repository repo,
-			DirCacheEntry entry,
-			CheckoutMetadata checkoutMetadata, ObjectLoader ol, FS fs,
+	private static void runExternalFilterCommand(Repository repo, String path,
+			CheckoutMetadata checkoutMetadata, ObjectLoader ol,
 			OutputStream channel) throws IOException {
+		FS fs = repo.getFS();
 		ProcessBuilder filterProcessBuilder = fs.runInShell(
 				checkoutMetadata.smudgeFilterCommand, new String[0]);
 		filterProcessBuilder.directory(repo.getWorkTree());
@@ -1527,13 +1489,11 @@ public class DirCacheCheckout {
 			}
 		} catch (IOException | InterruptedException e) {
 			throw new IOException(new FilterFailedException(e,
-					checkoutMetadata.smudgeFilterCommand,
-					entry.getPathString()));
+					checkoutMetadata.smudgeFilterCommand, path));
 		}
 		if (rc != 0) {
 			throw new IOException(new FilterFailedException(rc,
-					checkoutMetadata.smudgeFilterCommand,
-					entry.getPathString(),
+					checkoutMetadata.smudgeFilterCommand, path,
 					result.getStdout().toByteArray(MAX_EXCEPTION_TEXT_SIZE),
 					RawParseUtils.decode(result.getStderr()
 							.toByteArray(MAX_EXCEPTION_TEXT_SIZE))));
