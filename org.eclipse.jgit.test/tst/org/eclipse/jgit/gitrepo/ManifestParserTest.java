@@ -48,8 +48,11 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 import java.io.ByteArrayInputStream;
+import java.io.File;
 import java.io.IOException;
 import java.net.URI;
+import java.nio.file.Files;
+import java.nio.file.StandardOpenOption;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -184,5 +187,66 @@ public class ManifestParserTest {
 		testNormalize("http://a.b/", "http://a.b/");
 		testNormalize("", "");
 		testNormalize("a/b", "a/b");
+	}
+
+	@Test
+	public void testXXE() throws Exception {
+		File externalEntity = File.createTempFile("injected", "xml");
+		externalEntity.deleteOnExit();
+		Files.write(externalEntity.toPath(),
+				"<evil>injected xml</evil>"
+						.getBytes(UTF_8),
+				StandardOpenOption.WRITE);
+		String baseUrl = "https://git.google.com/";
+		StringBuilder xmlContent = new StringBuilder();
+		xmlContent.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
+				.append("<!DOCTYPE booo [ <!ENTITY foobar SYSTEM \"")
+				.append(externalEntity.getPath()).append("\"> ]>\n")
+				.append("<manifest>")
+				.append("<remote name=\"remote1\" fetch=\".\" />")
+				.append("<default revision=\"master\" remote=\"remote1\" />")
+				.append("&foobar;")
+				.append("<project path=\"foo\" name=\"foo\" groups=\"a,test\" />")
+				.append("</manifest>");
+
+		ManifestParser parser = new ManifestParser(null, null, "master",
+				baseUrl, null, null);
+		try {
+			parser.read(new ByteArrayInputStream(
+					xmlContent.toString().getBytes(UTF_8)));
+			fail("ManifestParser did not reject DOCTYPE declaration");
+		} catch (IOException e) {
+			assertTrue(e.getCause().getMessage().contains("DOCTYPE"));
+		}
+	}
+
+	@Test
+	public void testXXEParameterEntity() throws Exception {
+		File externalDtd = File.createTempFile("injected", "dtd");
+		externalDtd.deleteOnExit();
+		Files.write(externalDtd.toPath(),
+				"<!ENTITY injected \"<project path='bar' name='bar' />\">"
+						.getBytes(UTF_8),
+				StandardOpenOption.WRITE);
+		String baseUrl = "https://git.google.com/";
+		StringBuilder xmlContent = new StringBuilder();
+		xmlContent.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
+				.append("<!DOCTYPE booo [ <!ENTITY % ext SYSTEM \"")
+				.append(externalDtd.toURI()).append("\"> %ext; ]>\n")
+				.append("<manifest>")
+				.append("<remote name=\"remote1\" fetch=\".\" />")
+				.append("<default revision=\"master\" remote=\"remote1\" />")
+				.append("&injected;")
+				.append("</manifest>");
+
+		ManifestParser parser = new ManifestParser(null, null, "master",
+				baseUrl, null, null);
+		try {
+			parser.read(new ByteArrayInputStream(
+					xmlContent.toString().getBytes(UTF_8)));
+			fail("ManifestParser did not reject DOCTYPE declaration");
+		} catch (IOException e) {
+			assertTrue(e.getCause().getMessage().contains("DOCTYPE"));
+		}
 	}
 }

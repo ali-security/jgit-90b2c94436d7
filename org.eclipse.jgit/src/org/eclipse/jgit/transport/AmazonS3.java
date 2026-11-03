@@ -80,6 +80,8 @@ import java.util.TreeMap;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
+import javax.xml.parsers.ParserConfigurationException;
+import javax.xml.parsers.SAXParserFactory;
 
 import org.eclipse.jgit.internal.JGitText;
 import org.eclipse.jgit.lib.Constants;
@@ -94,7 +96,6 @@ import org.xml.sax.InputSource;
 import org.xml.sax.SAXException;
 import org.xml.sax.XMLReader;
 import org.xml.sax.helpers.DefaultHandler;
-import org.xml.sax.helpers.XMLReaderFactory;
 
 /**
  * A simple HTTP REST client for the Amazon S3 service.
@@ -686,9 +687,22 @@ public class AmazonS3 {
 
 					final XMLReader xr;
 					try {
-						xr = XMLReaderFactory.createXMLReader();
-					} catch (SAXException e) {
-						throw new IOException(JGitText.get().noXMLParserAvailable);
+						SAXParserFactory saxParserFactory = SAXParserFactory
+								.newInstance();
+						saxParserFactory.setNamespaceAware(true);
+						saxParserFactory.setFeature(
+								"http://xml.org/sax/features/external-general-entities", //$NON-NLS-1$
+								false);
+						saxParserFactory.setFeature(
+								"http://xml.org/sax/features/external-parameter-entities", //$NON-NLS-1$
+								false);
+						saxParserFactory.setFeature(
+								"http://apache.org/xml/features/disallow-doctype-decl", //$NON-NLS-1$
+								true);
+						xr = saxParserFactory.newSAXParser().getXMLReader();
+					} catch (SAXException | ParserConfigurationException e) {
+						throw new IOException(
+								JGitText.get().noXMLParserAvailable, e);
 					}
 					xr.setContentHandler(this);
 					try (InputStream in = c.getInputStream()) {
