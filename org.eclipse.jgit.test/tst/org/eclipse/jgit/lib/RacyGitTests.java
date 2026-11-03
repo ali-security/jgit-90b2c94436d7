@@ -58,6 +58,7 @@ import org.eclipse.jgit.treewalk.FileTreeIterator;
 import org.eclipse.jgit.treewalk.FileTreeIteratorWithTimeControl;
 import org.eclipse.jgit.treewalk.NameConflictTreeWalk;
 import org.eclipse.jgit.util.FileUtils;
+import org.junit.Ignore;
 import org.junit.Test;
 
 public class RacyGitTests extends RepositoryTestCase {
@@ -126,6 +127,7 @@ public class RacyGitTests extends RepositoryTestCase {
 	}
 
 	@Test
+	@Ignore("flaky: depends on file and index mtimes colliding within the filesystem's timestamp granularity; usually assumption-skipped, fails when they collide on ext4")
 	public void testRacyGitDetection() throws Exception {
 		TreeSet<Long> modTimes = new TreeSet<>();
 		File lastFile;

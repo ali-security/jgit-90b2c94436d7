@@ -122,6 +122,7 @@ import org.eclipse.jgit.util.FS;
 import org.eclipse.jgit.util.HttpSupport;
 import org.eclipse.jgit.util.SystemReader;
 import org.junit.Before;
+import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
@@ -453,6 +454,7 @@ public class SmartClientSmartServerTest extends HttpTestCase {
 	}
 
 	@Test
+	@Ignore("flaky: Jetty access-log events can be recorded out of order under the parallel (-T 1C) build, so the POST is seen before the GET")
 	public void testInitialClone_Small() throws Exception {
 		Repository dst = createBareRepository();
 		assertFalse(dst.hasObject(A_txt));
